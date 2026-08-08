@@ -1,0 +1,302 @@
+from ultralytics import YOLO
+import cv2
+import csv
+import time
+from datetime import datetime
+
+
+# LOAD MODEL
+
+
+model = YOLO("yolov8m.pt")
+
+
+# OPEN VIDEO
+
+
+cap = cv2.VideoCapture("videos/loitering_test.mp4")
+
+
+# ZONES
+
+# Computed as a fraction of the ACTUAL video resolution, not hardcoded
+# absolute pixels — see intrusion_detection.py for why this matters.
+
+frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
+frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+
+ZONE_A = (
+    int(frame_width * 0.55), int(frame_height * 0.15),
+    int(frame_width * 0.95), int(frame_height * 0.90),
+)
+ZONE_B = (
+    int(frame_width * 0.05), int(frame_height * 0.15),
+    int(frame_width * 0.45), int(frame_height * 0.90),
+)
+
+
+# SETTINGS
+
+
+LOITER_TIME = 10  # seconds
+# Tuned to fit within short test clips (a ~18s test video can never reach
+# a 20s threshold, since the clip ends before the timer could). For a
+# real deployment against longer/continuous footage, raise this back up
+# to whatever dwell duration actually constitutes suspicious loitering
+# for your use case (e.g. 20-60s).
+
+
+# DATA STRUCTURES
+
+
+entry_times = {}
+alerted_ids = set()
+
+
+# CSV LOG FILE
+
+
+csv_file = "logs/loitering_events.csv"
+
+with open(csv_file, "w", newline="") as file:
+    writer = csv.writer(file)
+
+    writer.writerow([
+        "Timestamp",
+        "Person_ID",
+        "Event",
+        "Zone"
+    ])
+
+
+# MAIN LOOP
+
+
+
+# FRAME-BASED TIMING
+
+# Using time.time() (wall-clock) here means dwell duration only makes
+# sense for a LIVE camera feed, where real seconds elapse between reads.
+# When processing a pre-recorded file, frames are read as fast as the
+# CPU/GPU can go — a 3-second video can be fully processed in under a
+# second, so a wall-clock LOITER_TIME could never be reached even if the
+# person is in-frame for the video's entire duration. Frame-count / fps
+# instead measures video-time, which is correct for both live and
+# file-based processing.
+
+video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+frame_number = 0
+
+while True:
+
+    ret, frame = cap.read()
+
+    if not ret:
+        break
+
+    frame_number += 1
+
+    results = model.track(
+        frame,
+        persist=True,
+        classes=[0],
+        conf=0.4,
+        tracker="trackers/tuned_bytetrack.yaml",
+        verbose=False
+    )
+
+    annotated_frame = results[0].plot()
+
+    
+    # DRAW ZONE A
+    
+
+    cv2.rectangle(
+        annotated_frame,
+        (ZONE_A[0], ZONE_A[1]),
+        (ZONE_A[2], ZONE_A[3]),
+        (0, 0, 255),
+        3
+    )
+
+    cv2.putText(
+        annotated_frame,
+        "ZONE A",
+        (ZONE_A[0], ZONE_A[1] - 10),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (0, 0, 255),
+        2
+    )
+
+    
+    # DRAW ZONE B
+    
+
+    cv2.rectangle(
+        annotated_frame,
+        (ZONE_B[0], ZONE_B[1]),
+        (ZONE_B[2], ZONE_B[3]),
+        (255, 0, 0),
+        3
+    )
+
+    cv2.putText(
+        annotated_frame,
+        "ZONE B",
+        (ZONE_B[0], ZONE_B[1] - 10),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (255, 0, 0),
+        2
+    )
+
+    
+    # PERSON TRACKING
+    
+
+    boxes = results[0].boxes
+
+    if boxes is not None:
+
+        for box in boxes:
+
+            if box.id is None:
+                continue
+
+            person_id = int(box.id)
+
+            x1, y1, x2, y2 = map(
+                int,
+                box.xyxy[0]
+            )
+
+            center_x = (x1 + x2) // 2
+            center_y = (y1 + y2) // 2
+
+            
+            # CHECK ZONES
+            
+
+            inside_zone_a = (
+                ZONE_A[0] < center_x < ZONE_A[2]
+                and
+                ZONE_A[1] < center_y < ZONE_A[3]
+            )
+
+            inside_zone_b = (
+                ZONE_B[0] < center_x < ZONE_B[2]
+                and
+                ZONE_B[1] < center_y < ZONE_B[3]
+            )
+
+            zone_name = None
+
+            if inside_zone_a:
+                zone_name = "ZONE_A"
+
+            elif inside_zone_b:
+                zone_name = "ZONE_B"
+
+            
+            # LOITERING LOGIC
+            
+
+            if zone_name:
+
+                if person_id not in entry_times:
+                    entry_times[person_id] = frame_number
+
+                dwell_time = (
+                    (frame_number - entry_times[person_id])
+                    / video_fps
+                )
+
+                # Show timer above person
+
+                cv2.putText(
+                    annotated_frame,
+                    f"{int(dwell_time)}s",
+                    (x1, y1 - 15),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 255, 255),
+                    2
+                )
+
+                # Alert if threshold exceeded
+
+                if (
+                    dwell_time >= LOITER_TIME
+                    and person_id not in alerted_ids
+                ):
+
+                    alerted_ids.add(person_id)
+
+                    timestamp = datetime.now()
+
+                    filename = (
+                        f"evidence/loitering_{person_id}_"
+                        f"{timestamp.strftime('%Y%m%d_%H%M%S')}.jpg"
+                    )
+
+                    cv2.imwrite(
+                        filename,
+                        annotated_frame
+                    )
+
+                    with open(
+                        csv_file,
+                        "a",
+                        newline=""
+                    ) as file:
+
+                        writer = csv.writer(file)
+
+                        writer.writerow([
+                            timestamp,
+                            person_id,
+                            "Loitering",
+                            zone_name
+                        ])
+
+                    cv2.putText(
+                        annotated_frame,
+                        f"LOITERING ALERT ID {person_id}",
+                        (50, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1,
+                        (0, 0, 255),
+                        3
+                    )
+
+                    print(
+                        f"LOITERING ALERT: "
+                        f"Person {person_id} in {zone_name}"
+                    )
+
+            else:
+
+                # Reset timer if person leaves zone
+
+                if person_id in entry_times:
+                    del entry_times[person_id]
+
+    
+    # DISPLAY
+    
+
+    cv2.imshow(
+        "Loitering Detection",
+        annotated_frame
+    )
+
+    if cv2.waitKey(1) & 0xFF == ord("q"):
+        break
+
+
+# CLEANUP
+
+
+cap.release()
+cv2.destroyAllWindows()
