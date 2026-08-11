@@ -1,0 +1,1 @@
+"""FastAPI + Redis backend for telemetry ingestion and real-time streaming."""
