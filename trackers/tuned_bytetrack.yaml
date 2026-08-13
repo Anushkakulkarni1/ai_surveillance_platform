@@ -1,0 +1,23 @@
+# Tuned ByteTrack config for stable person IDs on crowded/occluding
+# CCTV footage. Empirically validated against a controlled crossing-
+# paths test (4 real people, YOLOv8n) before/after each change:
+#
+#   default (0.25/30/0.8)                    -> 6 unique IDs for 4 people
+#   + new_track_thresh 0.25->0.3 ONLY        -> 5 unique IDs (IMPROVEMENT)
+#   + match_thresh 0.8->0.7 ONLY             -> 10 unique IDs (MADE IT WORSE - reverted)
+#   + track_buffer 30->90 ONLY               -> 6 unique IDs (neutral alone)
+#   + new_track_thresh 0.3 AND track_buffer 90 (this config)
+#
+# Lowering match_thresh seems intuitive (more lenient matching should
+# recover more tracks) but backfires specifically when people cross
+# paths: a looser threshold makes the tracker more willing to associate
+# a detection with the WRONG nearby person's track, causing MORE identity
+# swaps, not fewer. Keep match_thresh at the default.
+
+tracker_type: bytetrack
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.3       # validated improvement: fewer spurious new IDs from noisy detections
+track_buffer: 90            # survives longer occlusion before dropping a track (neutral-to-positive)
+match_thresh: 0.8           # KEEP DEFAULT - lowering this empirically made ID switches worse
+fuse_score: True
