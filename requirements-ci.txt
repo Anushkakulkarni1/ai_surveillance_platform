@@ -1,0 +1,14 @@
+# Version floors only (no upper-bound ceiling) so pip resolves a recent
+# release with a prebuilt Python 3.14 wheel instead of falling back to
+# a source build that requires a C/Fortran compiler + Meson.
+#   - numpy   >=2.3 ships cp314 wheels
+#   - scikit-learn >=1.7 ships cp314 wheels
+# Tested against numpy/scikit-learn's actual API used in
+# coordinates.py / frame_buffer.py / threshold_metrics.py, which only
+# use stable, long-standing APIs (np.stack, np.transpose, roc_curve),
+# so newer major versions are safe here.
+numpy>=2.3
+scikit-learn>=1.7
+pytest>=7.4
+black>=24.4
+flake8>=7.0
