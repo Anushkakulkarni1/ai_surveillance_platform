@@ -38,13 +38,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
 
-      - name: Check formatting (black --check)
-        run: |
-          black --check --diff coordinates.py frame_buffer.py threshold_metrics.py tests/ conftest.py
+      - name: Check formatting (black)
+        run: black --check --diff detection/coordinates.py ml/frame_buffer.py ml/threshold_metrics.py tests/ conftest.py
 
-      - name: Lint (flake8)
-        run: |
-          flake8 coordinates.py frame_buffer.py threshold_metrics.py tests/ conftest.py
+      
+      - name: Lint with flake8
+        run: flake8 detection/coordinates.py ml/frame_buffer.py ml/threshold_metrics.py tests/ conftest.py
 
       - name: Run tests (pytest)
         run: |
