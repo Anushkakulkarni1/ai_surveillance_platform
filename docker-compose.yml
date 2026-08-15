@@ -1,0 +1,144 @@
+
+
+services:
+
+
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: surveillance-redis
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - analytics-net
+    mem_limit: 640m
+    cpus: 0.5
+
+    user: "999:999"          
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+ 
+
+
+ 
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        VAD_BASE_CHANNELS: "16"
+    image: surveillance-platform:latest
+    container_name: surveillance-backend
+    command: ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CORS_ALLOWED_ORIGINS: http://localhost:8501,http://frontend:8501
+      TELEMETRY_STREAM_MAX_LENGTH: "2000"
+      LOG_LEVEL: INFO
+    env_file:
+      - .env
+    volumes:
+      
+      - ./models:/app/models:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - analytics-net
+    mem_limit: 1g
+    cpus: 1.0
+
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+
+ 
+ 
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    image: surveillance-platform:latest
+    container_name: surveillance-frontend
+    command: >
+      streamlit run dashboard/dashboard.py
+      --server.port=8501
+      --server.address=0.0.0.0
+      --server.headless=true
+      --browser.gatherUsageStats=false
+    ports:
+      - "8501:8501"
+    environment:
+      BACKEND_URL: http://backend:8000
+      REDIS_URL: redis://redis:6379/0
+    env_file:
+      - .env   
+    volumes:
+   
+      - ./logs:/app/logs
+      - ./knowledge:/app/knowledge:ro
+      - ./evidence:/app/evidence:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      # Streamlit's own built-in health endpoint 
+      test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - analytics-net
+    mem_limit: 2g
+    cpus: 1.5
+  
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    
+
+networks:
+  analytics-net:
+    name: surveillance-analytics-net
+    driver: bridge
+
+volumes:
+  redis-data:
+    name: surveillance-redis-data
