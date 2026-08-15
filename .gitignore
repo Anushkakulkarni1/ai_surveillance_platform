@@ -7,6 +7,7 @@ knowledge/faiss.index
 knowledge/knowledge_base.csv
 
 outputs/
+results/
 
 *.jpg
 *.png
